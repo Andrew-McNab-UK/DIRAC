@@ -12,6 +12,7 @@ from DIRAC.Core.Security.ProxyInfo                    import getProxyInfo
 from DIRAC.ConfigurationSystem.Client.Helpers         import Local
 from DIRAC.Core.Utilities.ReturnValues                import S_OK, S_ERROR
 from DIRAC.Core.Utilities.Subprocess                  import systemCall, shellCall
+from DIRAC.Core.LCG.GOCDBClient                       import GOCDBClient
 
 def executeGridCommand( proxy, cmd, gridEnvScript = None ):
   """ 
@@ -378,11 +379,63 @@ def getBdiiCEInfo( vo, host = None ):
 :return result structure: result['Value'][siteID]['CEs'][ceID]['Queues'][queueName]. For
                each siteID, ceID, queueName all the BDII/Glue parameters are retrieved  
   """  
+  siteDict = {}
+
+  # Populate siteDict from a GLUE 1 Top BDII
+  getGlue1TopBdiiCEInfo( vo, siteDict, host )
+
+  # Add to siteDict from a GLUE 2 Top BDII
+#  getGlue2TopBdiiCEInfo( vo, siteDict, host = None )
+
+  # Add to siteDict from GLUE 2 LDAP/HTTP found from GOCDB
+  getGocdbCEInfo( vo, siteDict )
+    
+  return S_OK( siteDict )
+
+def getGocdbCEInfo( vo, siteDict, host = None ):
+  """ Get information for all the CEs/queues for a given VO
+  
+:param vo: BDII VO name
+:return result structure: result['Value'][siteID]['CEs'][ceID]['Queues'][queueName]. For
+               each siteID, ceID, queueName all the BDII/Glue parameters are retrieved  
+  """
+
+  sitesInfo = {}
+  
+  gocdbClient = GOCDBClient()
+
+  for serviceType in ( 'CREAM-CE', 'ARC-CE', 'uk.ac.gridpp.vac', 'uk.ac.gridpp.vcycle' ):  
+    result = gocdbClient.getServiceEndpointInfo( 'service_type', serviceType )
+    if result['OK']:
+    
+      for ceDict in result['Value']:
+            
+        if 'URL' not in ceDict or 'SITENAME' not in ceDict:
+          continue
+
+        # Make sure we have the details of the parent site cached
+        if ceDict['SITENAME'] not in sitesInfo:
+          result = gocdbClient.getSiteInfo( ceDict['SITENAME'] )
+          if result['OK']:
+            sitesInfo[ceDict['SITENAME']] = result['Value']
+
+        if ceDict['URL'][:7] == 'ldap://':
+          print ceDict['URL']
+                
+#        elif ceDict['URL'][:7] == 'http://' or ceDict['URL'][:8] == 'https://':
+#          print ceDict['URL']          
+
+def getGlue1TopBdiiCEInfo( vo, siteDict, host = None ):
+  """ Get information for all the CEs/queues for a given VO
+  
+:param vo: BDII VO name
+:return result structure: result['Value'][siteID]['CEs'][ceID]['Queues'][queueName]. For
+               each siteID, ceID, queueName all the BDII/Glue parameters are retrieved  
+  """  
   result = ldapCEState( '', vo, host = host )
   if not result['OK']:
     return result
 
-  siteDict = {}
   ceDict = {}
   queueDict = {}
   

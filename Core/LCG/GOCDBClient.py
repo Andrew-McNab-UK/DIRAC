@@ -5,6 +5,8 @@ __RCSID__ = "$Id$"
 import urllib2
 import time
 import socket
+import ssl
+import os
 
 from datetime import datetime, timedelta
 from xml.dom import minidom
@@ -56,7 +58,7 @@ class GOCDBClient( object ):
       if given, could be a datetime or a string ("YYYY-MM-DD"), and download
       DownTimes starting after that date.
 
-      :attr:`startingInHours`: optional integer. If given, donwload
+      :attr:`startingInHours`:an optional integer. If given, donwload
       DownTimes starting in the next given hours (startDate is then useless)
 
     :return: (example)
@@ -190,16 +192,17 @@ class GOCDBClient( object ):
 
 #############################################################################
 
-#  def getSiteInfo(self, site):
-#    """
-#    Get site info (in a dictionary)
-#
-#    :params:
-#      :attr:`entity` : a string. Actual name of the site.
-#    """
-#
-#    siteXML = self._getSiteCurlDownload(site)
-#    return S_OK(self._siteXMLParsing(siteXML))
+  def getSiteInfo(self, site):
+    """
+    Get site info (in a dictionary)
+
+    :params:
+      :attr:`entity` : a string. Actual name of the site.
+    """
+
+    siteXML = self._getSiteCurlDownload(site)
+    print str(siteXML)
+    return S_OK(self._siteXMLParsing(siteXML))
 
 #############################################################################
 
@@ -237,7 +240,7 @@ class GOCDBClient( object ):
     gocdb_ep = gocdb_ep + when + gocdbpi_startDate
 
     req = urllib2.Request( gocdb_ep )
-    dtPage = urllib2.urlopen( req )
+    dtPage = urllib2.urlopen( req , capath = '/etc/grid-security/certificates' )
 
     dt = dtPage.read()
 
@@ -262,27 +265,36 @@ class GOCDBClient( object ):
     gocdb_ep = "https://goc.egi.eu/gocdbpi_v4/public/?method=get_service_endpoint&" \
         + granularity + '=' + entity
 
-    service_endpoint_page = urllib2.urlopen( gocdb_ep )
+    service_endpoint_page = urllib2.urlopen( gocdb_ep, capath = '/etc/grid-security/certificates' )
 
     return service_endpoint_page.read()
 
 #############################################################################
 
-#  def _getSiteCurlDownload(self, site):
-#    """
-#    Calls method `get_site` from the GOC DB programmatic interface.
-#
-#    :params:
-#      :attr:`site` : a string. Actual name of the site.
-#    """
-#
-#    # GOCDB-PI query
-#    gocdb_ep = "https://goc.egi.eu/gocdbpi_v4/public/?method=get_site&sitename="+site
-#
-#    req = urllib2.Request(gocdb_ep)
-#    site_page = urllib2.urlopen(req)
-#
-#    return site_page.read()
+  def _getSiteCurlDownload(self, site):
+    """
+    Calls method `get_site` from the GOC DB programmatic interface.
+
+    :params:
+      :attr:`site` : a string. Actual name of the site.
+    """
+
+    # GOCDB-PI query
+    gocdb_ep = "https://goc.egi.eu/gocdbpi_v4/public/?method=get_site&sitename="+site
+    
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+
+    try:
+      ctx.load_cert_chain( os.environ['X509_USER_CERT'], os.environ['X509_USER_KEY'] )
+    except:
+      pass
+
+    ctx.load_verify_locations( capath = '/etc/grid-security/certificates' )
+
+    req = urllib2.Request( gocdb_ep )
+    site_page = urllib2.urlopen( req, context = ctx )
+
+    return site_page.read()
 
 #############################################################################
 
@@ -348,3 +360,13 @@ class GOCDBClient( object ):
     services = doc.getElementsByTagName( "SERVICE_ENDPOINT" )
     services = [_parseSingleElement( s ) for s in services]
     return services
+
+  def _siteXMLParsing( self, siteXML ):
+    """ Performs xml parsing from the site string
+    Returns a list.
+    """
+    doc = minidom.parseString( siteXML )
+    site = doc.getElementsByTagName( "SITE" )
+    site = [_parseSingleElement( s ) for s in site]
+    return site
+
