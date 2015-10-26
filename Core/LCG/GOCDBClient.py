@@ -201,7 +201,6 @@ class GOCDBClient( object ):
     """
 
     siteXML = self._getSiteCurlDownload(site)
-    print str(siteXML)
     return S_OK(self._siteXMLParsing(siteXML))
 
 #############################################################################

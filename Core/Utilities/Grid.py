@@ -6,6 +6,7 @@ __RCSID__ = "$Id$"
 import os
 import types
 import re
+import pprint
 from DIRAC.Core.Utilities.Os                          import sourceEnv
 from DIRAC.FrameworkSystem.Client.ProxyManagerClient  import gProxyManager
 from DIRAC.Core.Security.ProxyInfo                    import getProxyInfo
@@ -159,7 +160,7 @@ For example result['Value'][0]['GlueSiteLocation']
 
   return S_OK( sites )
 
-def ldapCluster( ce, attr = None, host = None ):
+def ldapCluster( ce, attr = None, host = None, base = None ):
   """ CE (really SubCluster in definition of bdii) information from bdii.
 It contains by the way host information for ce.
 
@@ -171,7 +172,7 @@ For example result['Value'][0]['GlueHostBenchmarkSI00']
   """
   filt = '(GlueClusterUniqueID=%s)' % ce
 
-  result = ldapsearchBDII( filt, attr, host )
+  result = ldapsearchBDII( filt, attr, host, base )
 
   if not result['OK']:
     return result
@@ -182,7 +183,7 @@ For example result['Value'][0]['GlueHostBenchmarkSI00']
 
   return S_OK( clusters )
 
-def ldapCE( ce, attr = None, host = None ):
+def ldapCE( ce, attr = None, host = None, base = None ):
   """ CE (really SubCluster in definition of bdii) information from bdii.
 It contains by the way host information for ce.
 
@@ -194,7 +195,7 @@ For example result['Value'][0]['GlueHostBenchmarkSI00']
   """
   filt = '(GlueSubClusterUniqueID=%s)' % ce
 
-  result = ldapsearchBDII( filt, attr, host )
+  result = ldapsearchBDII( filt, attr, host, base )
 
   if not result['OK']:
     return result
@@ -205,7 +206,7 @@ For example result['Value'][0]['GlueHostBenchmarkSI00']
 
   return S_OK( ces )
 
-def ldapCEState( ce, vo, attr = None, host = None ):
+def ldapCEState( ce, vo, attr = None, host = None, base = None ):
   """ CEState information from bdii. Only CE with CEAccessControlBaseRule=VO:lhcb are selected.
 
 :param  ce: ce or part of it with globing, for example, "ce0?.tier2.hep.manchester*"
@@ -219,7 +220,7 @@ For example result['Value'][0]['GlueCEStateStatus']
   voFilters += '(GlueCEAccessControlBaseRule=VO:%s)' % vo
   filt = '(&(GlueCEUniqueID=%s*)(|%s))' % ( ce, voFilters )
   
-  result = ldapsearchBDII( filt, attr, host )
+  result = ldapsearchBDII( filt, attr, host, base )
 
   if not result['OK']:
     return result
@@ -382,7 +383,7 @@ def getBdiiCEInfo( vo, host = None ):
   siteDict = {}
 
   # Populate siteDict from a GLUE 1 Top BDII
-  getGlue1TopBdiiCEInfo( vo, siteDict, host )
+#  getGlue1TopBdiiCEInfo( vo, siteDict, host )
 
   # Add to siteDict from a GLUE 2 Top BDII
 #  getGlue2TopBdiiCEInfo( vo, siteDict, host = None )
@@ -400,30 +401,96 @@ def getGocdbCEInfo( vo, siteDict, host = None ):
                each siteID, ceID, queueName all the BDII/Glue parameters are retrieved  
   """
 
-  sitesInfo = {}
-  
   gocdbClient = GOCDBClient()
 
   for serviceType in ( 'CREAM-CE', 'ARC-CE', 'uk.ac.gridpp.vac', 'uk.ac.gridpp.vcycle' ):  
     result = gocdbClient.getServiceEndpointInfo( 'service_type', serviceType )
     if result['OK']:
     
-      for ceDict in result['Value']:
-            
-        if 'URL' not in ceDict or 'SITENAME' not in ceDict:
+      for oneCE in result['Value']:
+        if 'URL' not in oneCE or 'SITENAME' not in oneCE:
           continue
 
-        # Make sure we have the details of the parent site cached
-        if ceDict['SITENAME'] not in sitesInfo:
-          result = gocdbClient.getSiteInfo( ceDict['SITENAME'] )
-          if result['OK']:
-            sitesInfo[ceDict['SITENAME']] = result['Value']
+        try:
+          hostPort = oneCE['URL'].split('/')[2]
+          base     = oneCE['URL'].split('/')[3]
+        except:
+          continue
+          
+        # Will be populated by (at most) one of the following
+        ceDict = {}
+        queueDict = {}
+        
+        if oneCE['URL'][:7] == 'ldap://' and oneCE['URL'].endswith('o=grid'):
 
-        if ceDict['URL'][:7] == 'ldap://':
-          print ceDict['URL']
-                
-#        elif ceDict['URL'][:7] == 'http://' or ceDict['URL'][:8] == 'https://':
-#          print ceDict['URL']          
+          result = ldapCEState( '', vo, host = hostPort, base = base )
+          if not result['OK']: 
+            continue
+
+          for queue in result['Value']:
+            clusterID = queue.get('GlueForeignKey','').replace('GlueClusterUniqueID=','')
+            ceID = queue.get('GlueCEUniqueID','').split(':')[0]
+            queueDict[queue['GlueCEUniqueID']] = queue
+            queueDict[queue['GlueCEUniqueID']]['CE'] = ceID
+            if not ceID in ceDict:
+              result = ldapCluster( clusterID, host = hostPort, base = base )
+              if not result['OK']:
+                continue
+              if not result['Value']:
+                continue
+
+              ce = result['Value'][0]
+              ceDict[ceID] = ce
+ 
+              fKey = ce['GlueForeignKey']
+              siteID = ''
+              for key in fKey:
+                if key.startswith('GlueSiteUniqueID'):
+                  siteID = key.replace('GlueSiteUniqueID=','')
+              ceDict[ceID]['Site'] = siteID
+
+              result = ldapCE( clusterID, host = hostPort, base = base )
+              ce = {}
+              if result['OK'] and result['Value']:
+                ce = result['Value'][0]
+              ceDict[ceID].update( ce )
+
+#        elif oneCE['URL'][:7] == 'http://' or oneCE['URL'][:8] == 'https://':
+#          print oneCE['URL']
+
+        else:
+          continue          
+  
+        # Make sure we have the details of the parent site stored in GLUE1 form
+        if oneCE['SITENAME'] not in siteDict:
+          result = gocdbClient.getSiteInfo( oneCE['SITENAME'] )
+          if result['OK']:
+            siteDict[oneCE['SITENAME']] = {}
+            
+            for mapping in ( ('GlueSiteSysAdminContact', 'CONTACT_EMAIL'),
+                             ('GlueSiteLongitude', 'LONGITUDE'),
+                             ('GlueSiteLatitude', 'LATITUDE'),
+                             ('GlueSiteDescription', 'OFFICIAL_NAME')
+                           ):
+              try:                
+                siteDict[oneCE['SITENAME']][mapping[0]] = result['Value'][0][mapping[1]]
+              except:
+                pass
+
+        for ceID in ceDict:
+          siteID = ceDict[ceID]['Site']
+          if siteID in siteDict:
+            siteDict[siteID].setdefault('CEs',{})
+            siteDict[siteID]['CEs'][ceID] = ceDict[ceID]
+
+        for queueID in queueDict:
+          ceID = queueDict[queueID]['CE']
+          siteID = ceDict[ceID]['Site']
+          siteDict[siteID]['CEs'][ceID].setdefault('Queues',{})
+          queueName = re.split( ':\d+/', queueDict[queueID]['GlueCEUniqueID'] )[1]
+          siteDict[siteID]['CEs'][ceID]['Queues'][queueName] = queueDict[queueID]
+
+  return S_OK( siteDict )
 
 def getGlue1TopBdiiCEInfo( vo, siteDict, host = None ):
   """ Get information for all the CEs/queues for a given VO

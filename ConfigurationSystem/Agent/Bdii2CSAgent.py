@@ -11,6 +11,8 @@
 
 __RCSID__ = "$Id$"
 
+import pprint
+
 from DIRAC                                              import S_OK, S_ERROR, gConfig
 from DIRAC.Core.Base.AgentModule                        import AgentModule
 from DIRAC.Core.Utilities.Grid                          import getBdiiCEInfo, getBdiiSEInfo
@@ -23,6 +25,7 @@ from DIRAC.ConfigurationSystem.Client.Utilities         import getGridCEs, getSi
 
 class Bdii2CSAgent( AgentModule ):
 
+  dryrun = False
   addressTo = ''
   addressFrom = ''
   voName = ''
@@ -153,6 +156,8 @@ class Bdii2CSAgent( AgentModule ):
           if not result['OK']:
             self.log.error( 'Can not send new site notification mail', result['Message'] )
 
+    if self.dryrun:
+      pprint.pprint(bdiiInfo)
     return S_OK()
 
   def __getBdiiCEInfo( self, vo ):
@@ -217,6 +222,8 @@ class Bdii2CSAgent( AgentModule ):
       
     # We have collected all the changes, consolidate VO settings
     result = self.__updateCS( bdiiChangeSet )
+#    if self.dryrun:
+#      pprint.pprint(ceBdiiDict)
     return result
 
   def __updateCS( self, bdiiChangeSet ):
@@ -245,18 +252,21 @@ class Bdii2CSAgent( AgentModule ):
         self.log.info( 'The following configuration changes were detected:' )  
         self.log.info( body )
 
-      for section, option, value, new_value in changeSet:
-        if value == 'Unknown' or not value:
-          self.csAPI.setOption( cfgPath( section, option ), new_value )
-        else:
-          self.csAPI.modifyValue( cfgPath( section, option ), new_value )
+      if not self.dryrun:
+        for section, option, value, new_value in changeSet:
+          if value == 'Unknown' or not value:
+            self.csAPI.setOption( cfgPath( section, option ), new_value )
+          else:
+            self.csAPI.modifyValue( cfgPath( section, option ), new_value )
 
-      result = self.csAPI.commit()
-      if not result['OK']:
-        self.log.error( "Error while committing to CS", result['Message'] )
+        result = self.csAPI.commit()
+        if not result['OK']:
+          self.log.error( "Error while committing to CS", result['Message'] )
+        else:
+          self.log.info( "Successfully committed %d changes to CS" % len( changeList ) )
+        return result
       else:
-        self.log.info( "Successfully committed %d changes to CS" % len( changeList ) )
-      return result
+        return S_OK()
     else:
       self.log.info( "No changes found" )
       return S_OK()
@@ -325,3 +335,4 @@ class Bdii2CSAgent( AgentModule ):
     # We have collected all the changes, consolidate VO settings
     result = self.__updateCS( bdiiChangeSet )
     return result
+    
